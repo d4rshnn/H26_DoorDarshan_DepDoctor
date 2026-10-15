@@ -51,7 +51,8 @@ report the results honestly.
    - Never change files under `tests/`.
    If you cannot write valid JSON, skip this step. The next command falls back to the local model.
 
-4. Test the fixes and build the report:
+4. Test the fixes and build the report. This takes 2 to 3 minutes: set the terminal tool's timeout to 600
+   seconds for this command, or add `--no-canary` to make it faster (about 95 seconds):
    `py -3.12 -m tool finish TARGET --out-dir out`
    It validates your proposals, applies each in a sandbox copy, re-runs the tests, and writes
    `out/capsule.md`, `out/capsule.json` and `out/capsule.html`.

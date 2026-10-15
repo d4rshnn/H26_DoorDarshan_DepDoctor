@@ -160,6 +160,22 @@ If the repo has no pytest suite, the capsule says the tests could not run, and e
 
 Code lives in `tool/` (one module per stage), tests in `tests_tool/`, the Hermes skill in `skill/depdoctor/`.
 
+## Tech stack
+
+| Layer | Technology | Role |
+|---|---|---|
+| Language | Python 3.12 (the target supports 3.12 and 3.13, not 3.14) | All of DepDoctor |
+| DepDoctor's libraries | Python standard library only (`ast`, `tomllib`, `json`, `re`, `difflib`, `shutil`, `subprocess`, `urllib`, `argparse`, `pathlib`, `html`) | Parse code and manifests, copy repos, run commands, diff, call the local model, build the CLI and the HTML report |
+| Test runner | pytest (installed only inside throwaway virtual environments) | Runs the target's own tests |
+| Local model | Gemma 4 E4B (`gemma4:e4b`, Google DeepMind, open weights) | Proposes fixes as JSON; the only AI step |
+| Model server | Ollama 0.40.4 | Runs the model locally with an OpenAI-compatible API on `localhost` |
+| Agent runtime | Hermes Agent v0.22.1 (Nous Research, open source) | Loads the DepDoctor skill and runs its commands |
+| Skill format | [agentskills.io](https://agentskills.io) `SKILL.md` | Exposes the workflow to an agent |
+| Report | Self-contained HTML and CSS (no JavaScript, no external files), Markdown, JSON | The Dependency Exit Capsule |
+| Demo | PowerShell script (`demo/run_demo.ps1`) | One-command reproducible demonstration |
+
+No cloud service, paid API, API key, web framework, database or container is used.
+
 ## Dependencies
 
 DepDoctor uses only the Python standard library. External tools: Ollama, Hermes Agent (optional route), and pytest, which is installed only inside the throwaway virtual environments created for the target. The target's own packages are installed only inside those environments. Pip needs network access for that step.
@@ -195,7 +211,15 @@ hermes chat -s depdoctor -t terminal,file,skills --in .
 hermes chat --query-file demo\ask.txt --oneshot -Q -s depdoctor -t terminal,file,skills --in .
 ```
 
-**Honest status.** In our tests the skill loads in Hermes, and Hermes ran `analyze` through it correctly. With the 4B local model on a laptop without a GPU, Hermes did not reliably complete the full multi-step run: its own instructions and tool definitions need more than Ollama's default 4,096-token window, and small models lose the task after a tool call. `finish` therefore does not depend on Hermes: it runs the whole pipeline itself and falls back to a direct local-model call when no valid `proposals.json` exists. The verified, reproducible path is the `finish` command above.
+**Context window.** Ollama's default window is only 4,096 tokens, which Hermes's own instructions and tool definitions overflow, so the model loses the task after its first tool call (we saw exactly this). Create a copy of the model with a 64K window and use it with `-m gemma4-ctx`:
+
+```powershell
+"FROM gemma4:e4b`nPARAMETER num_ctx 65536" | Set-Content Modelfile.ctx -Encoding ascii
+ollama create gemma4-ctx -f Modelfile.ctx
+hermes chat -m gemma4-ctx -s depdoctor -t terminal,file,skills --in .
+```
+
+**Honest status.** With the 64K copy, Hermes loaded the skill and ran `analyze`, then `finish` (the right commands, in order). `finish` takes about 150 s or more on our laptop, and Hermes's terminal tool stopped it at its own 180 s timeout, so we did not obtain a complete Hermes-driven run; Hermes reported the timeout accurately. To retry through Hermes, ask it to run `finish` with `--no-canary` (about 95 s) or to use a terminal timeout of 600 s. `finish` does not depend on Hermes: it runs the whole pipeline itself and falls back to a direct local-model call when no valid `proposals.json` exists. The verified, reproducible path is the `finish` command run directly.
 
 ## Measured results
 
