@@ -93,7 +93,8 @@ def cmd_analyze(args):
 def cmd_finish(args):
     from .finish import finish
 
-    run = finish(args.repo, args.out_dir, python=args.python, model=args.model, base_url=args.base_url)
+    run = finish(args.repo, args.out_dir, python=args.python, model=args.model, base_url=args.base_url,
+                 canary=not args.no_canary)
     return 0 if "capsule_json" in run["outputs"] else 1
 
 
@@ -158,6 +159,8 @@ def build_parser():
     fin.add_argument("--python", default="3.12", help="Python version for the test venv (default: 3.12)")
     fin.add_argument("--model", default=DEFAULT_MODEL, help=f"model for the fallback call (default: {DEFAULT_MODEL})")
     fin.add_argument("--base-url", default=DEFAULT_BASE_URL, help="local model endpoint; only localhost is allowed")
+    fin.add_argument("--no-canary", action="store_true",
+                     help="skip the verifier self-check (a known-bad change that must be reported as regressed)")
     fin.set_defaults(func=cmd_finish)
 
     return parser

@@ -120,7 +120,8 @@ def test_agent_proposals_are_used_when_valid(repo, tmp_path, capsys):
     assert run["model"]["name_source"].startswith("configured model")
     assert "Proposal origin: agent-written." in capsule_text(out)
     assert "Dependency Exit Capsule" in (out / "capsule.html").read_text(encoding="utf-8")
-    assert [s["step"] for s in run["steps"]] == ["scan", "baseline", "verify", "capsule", "write capsule", "report"]
+    assert [s["step"] for s in run["steps"]] == ["scan", "baseline", "verify", "canary", "strength", "capsule",
+                                                 "write capsule", "report"]
     assert all(s["ok"] and s["seconds"] >= 0 and s["command"] for s in run["steps"])
     assert run["python"]["requested"] == "3.12" and run["python"]["baseline"] == "3.12.x"
     printed = capsys.readouterr().out
@@ -214,6 +215,113 @@ def test_target_folder_untouched(repo, tmp_path):
     assert result["apply_ok"] is True and "+Jinja2>=3.1,<4" in result["applied_diff"]
     assert (out / ".sandbox" / "verify" / "p1" / "src" / "requirements.txt").read_text().splitlines()[3] == \
         "Jinja2>=3.1,<4"
+
+
+# ---------------------------------------------------------------- canary
+
+class CanaryFakes(Fakes):
+    """Like Fakes, but the canary (and only the canary) comes back regressed, as a working verifier would."""
+
+    def verify(self, repo, proposals, baseline, workdir, python="3.12"):
+        out = super().verify(repo, proposals, baseline, workdir, python)
+        for r in out["results"]:
+            if r["proposal_id"] == "canary":
+                r.update(verdict="regressed", reason="passed dropped from 9 to 0", fixed_tests=[],
+                         after=after_run(0, 0), newly_broken_tests=[FAILING])
+        return out
+
+
+def test_finish_runs_canary_and_passes_it_on(repo, tmp_path, capsys):
+    fakes, out = CanaryFakes(), tmp_path / "out"
+    run = run_finish(repo, out, fakes)
+    assert [c["ids"] for c in fakes.calls["verify"]] == [["p1"], ["canary"]]
+    assert fakes.calls["verify"][1]["workdir"] == out / ".sandbox" / "canary"
+    canary = json.loads((out / "canary.json").read_text())
+    assert canary["detected"] is True and canary["package"] == "toml" and canary["verdict"] == "regressed"
+    assert run["canary"] == {"package": "toml", "verdict": "regressed", "expected": "regressed", "detected": True,
+                             "reason": "passed dropped from 9 to 0"}
+    assert run["outputs"]["canary"] == str(out / "canary.json")
+    assert "canary: removed toml, verdict regressed, detected yes" in capsys.readouterr().out
+    text = capsule_text(out)
+    assert "Verifier self-check (negative control): removed toml" in text
+    assert "the verifier detected the breakage: yes" in text
+
+
+def test_canary_is_never_a_proposal_or_a_fix(repo, tmp_path):
+    fakes, out = CanaryFakes(), tmp_path / "out"
+    run_finish(repo, out, fakes)
+    for name in ("verify.json", "proposals.fallback.json"):
+        assert "canary" not in (out / name).read_text(), name
+    capsule = json.loads((out / "capsule.json").read_text(encoding="utf-8"))
+    sec5_6 = json.dumps([s for s in capsule["sections"] if s["id"] in ("5", "6")])
+    assert "canary" not in sec5_6.lower()
+    assert "- canary:" not in (out / "capsule.md").read_text(encoding="utf-8").split("## Sections")[0]
+
+
+def test_missed_canary_is_flagged(repo, tmp_path, capsys):
+    fakes, out = Fakes(), tmp_path / "out"  # plain Fakes says "improved" to everything: a broken verifier
+    run_finish(repo, out, fakes)
+    assert "detected NO" in capsys.readouterr().out
+    capsule = json.loads((out / "capsule.json").read_text(encoding="utf-8"))
+    sec9 = [i for i in capsule["sections"][8]["items"] if i["source"] == "canary.json"]
+    sec10 = [i for i in capsule["sections"][9]["items"] if i["source"] == "canary.json"]
+    assert sec9 and sec9[0]["text"].startswith("WARNING: the verifier missed a known-bad change")
+    assert sec10 and sec10[0]["provenance"] == "unverified"
+
+
+def test_no_canary_skips_it(repo, tmp_path, capsys):
+    fakes, out = CanaryFakes(), tmp_path / "out"
+    run = run_finish(repo, out, fakes, canary=False)
+    assert [c["ids"] for c in fakes.calls["verify"]] == [["p1"]]
+    assert run["canary"]["detected"] is None and "--no-canary" in run["canary"]["reason"]
+    assert "canary" not in [s["step"] for s in run["steps"]]
+    assert "canary: not judged (skipped: --no-canary was given)" in capsys.readouterr().out
+    assert "Verifier self-check (negative control) was not judged" in capsule_text(out)
+    from tool.cli import build_parser
+    assert build_parser().parse_args(["finish", "r", "--no-canary"]).no_canary is True
+    assert build_parser().parse_args(["finish", "r"]).no_canary is False
+
+
+def test_canary_skipped_when_nothing_verified(repo, tmp_path):
+    fakes = Fakes(propose_result={"schema": 1, "model": "m", "proposals": [], "rejected": [], "error": "x"})
+    out = tmp_path / "out"
+    run = run_finish(repo, out, fakes)
+    assert fakes.calls["verify"] == [] and "no proposal was verified" in run["canary"]["reason"]
+    assert json.loads((out / "canary.json").read_text())["provenance"] == "unverified"
+
+
+# ---------------------------------------------------------------- strength
+
+def test_finish_writes_strength_and_passes_it_on(repo, tmp_path, capsys):
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_report.py").write_text("from linkwatch import report\n")
+    fakes, out = CanaryFakes(), tmp_path / "out"
+    run = run_finish(repo, out, fakes)
+    strength = json.loads((out / "strength.json").read_text())
+    assert strength["provenance"] == "observed"
+    entry = strength["proposals"][0]
+    assert entry["proposal_id"] == "p1" and entry["packages"] == ["Jinja2"]
+    assert entry["reach"][0]["chain"] == "tests/test_report.py -> linkwatch/report.py -> jinja2"
+    assert run["outputs"]["strength"] == str(out / "strength.json")
+    assert "strength p1: Jinja2: 1 test file(s), e.g. tests/test_report.py -> linkwatch/report.py -> jinja2" \
+        in capsys.readouterr().out
+    assert "Evidence strength for p1: 1 test file(s) reach Jinja2" in capsule_text(out)
+
+
+def test_finish_strength_without_reaching_test(repo, tmp_path):
+    fakes, out = CanaryFakes(), tmp_path / "out"  # the fixture repo has no tests at all
+    run_finish(repo, out, fakes)
+    text = capsule_text(out)
+    assert "Evidence strength for p1: no test reaches Jinja2: the test result above cannot confirm this change" in text
+    assert "No test imports the code changed by p1 (Jinja2)" in text
+
+
+def test_strength_empty_when_nothing_verified(repo, tmp_path):
+    fakes = Fakes(propose_result={"schema": 1, "model": "m", "proposals": [], "rejected": [], "error": "x"})
+    out = tmp_path / "out"
+    run_finish(repo, out, fakes)
+    assert json.loads((out / "strength.json").read_text())["proposals"] == []
+    assert "Evidence strength" not in capsule_text(out)
 
 
 # ---------------------------------------------------------------- cli

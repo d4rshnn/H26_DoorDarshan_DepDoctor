@@ -56,7 +56,42 @@ def _get(d: Any, *keys: str, default=None):
     return d
 
 
-def build(evidence, baseline, proposals, verify, *, now=None, model_info=None) -> dict:
+def _canary_items(add, canary) -> None:
+    """Section 8/9/10 items for the verifier self-check. canary=None (not passed) adds nothing."""
+    if not isinstance(canary, dict):
+        return
+    detected = canary.get("detected")
+    if detected is None:
+        add(8, f"Verifier self-check (negative control) was not judged: {canary.get('reason', 'reason not recorded')}.", "unverified", "canary.json")
+        add(10, "The verifier was not checked against a known-bad change in this run, so its verdicts are not calibrated.", "unverified", "canary.json")
+        return
+    add(8, f"Verifier self-check (negative control): removed {canary.get('package','?')} from requirements.txt in a sandbox copy; verdict {canary.get('verdict','not recorded')}; the verifier detected the breakage: {'yes' if detected else 'NO'} (before {_counts(canary.get('before'))}; after {_counts(canary.get('after'))}).", "executed", "canary.json")
+    if not detected:
+        add(9, f"WARNING: the verifier missed a known-bad change (removing {canary.get('package','?')} gave verdict {canary.get('verdict','not recorded')}, expected regressed). The verdicts above are not confirmed.", "executed", "canary.json")
+        add(10, "The verifier missed a known-bad change, so a passing or improved verdict in this capsule may be wrong.", "unverified", "canary.json")
+
+
+def _strength_items(add, strength) -> None:
+    """Section 8/10 items saying whether any test reaches each proposal's change. None adds nothing."""
+    if not isinstance(strength, dict):
+        return
+    unreached = []
+    for p in strength.get("proposals", []) or []:
+        pid = p.get("proposal_id", "proposal")
+        if not p.get("reach"):
+            add(8, f"Evidence strength for {pid}: no changed package could be identified, so test reach was not checked.", "unverified", "strength.json")
+            continue
+        for r in p["reach"]:
+            if r.get("tests_reaching"):
+                add(8, f"Evidence strength for {pid}: {len(r['tests_reaching'])} test file(s) reach {r.get('package','?')}: {r.get('chain')}", "observed", "strength.json")
+            else:
+                add(8, f"Evidence strength for {pid}: no test reaches {r.get('package','?')}: the test result above cannot confirm this change", "observed", "strength.json")
+                unreached.append(f"{pid} ({r.get('package','?')})")
+    if unreached:
+        add(10, f"No test imports the code changed by {', '.join(unreached)}; a passing run does not confirm those changes.", "unverified", "strength.json")
+
+
+def build(evidence, baseline, proposals, verify, *, now=None, model_info=None, canary=None, strength=None) -> dict:
     evidence = evidence if isinstance(evidence, dict) else None
     baseline = baseline if isinstance(baseline, dict) else None
     proposals = proposals if isinstance(proposals, dict) else None
@@ -151,6 +186,8 @@ def build(evidence, baseline, proposals, verify, *, now=None, model_info=None) -
         add(8,f"{r.get('proposal_id','proposal')}: apply_ok={r.get('apply_ok','not recorded')}; before {_counts(pytest)}; after {_counts(after)}; fixed_tests={r.get('fixed_tests',[])}; newly_broken_tests={r.get('newly_broken_tests',[])}; verdict={r.get('verdict','not recorded')}{reason}","executed",f"verify.json#results[{i}]")
         if r.get("verdict")=="could_not_run": add(8,f"{r.get('proposal_id','proposal')} could not be run.","unverified",f"verify.json#results[{i}]")
     if not verify: add(8,"Verify results are missing.","unverified","verify.json")
+    _strength_items(add, strength)
+    _canary_items(add, canary)
     if not s[7]["items"]: add(8,"not available","unverified","inputs")
 
     for i,r in enumerate(results):

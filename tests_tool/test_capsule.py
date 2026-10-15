@@ -151,6 +151,98 @@ def test_install_summary_uses_success_line_or_trimmed_last_line(inputs):
     assert len(item["text"].split("; ", 1)[1]) == 300
 
 
+CANARY = {"package": "click", "line_removed": "click>=7", "verdict": "regressed", "expected": "regressed",
+          "detected": True, "reason": "passed dropped from 9 to 0",
+          "before": {"exit_code": 1, "passed": 9, "failed": 1, "errors": 0},
+          "after": {"exit_code": 4, "passed": 0, "failed": 0, "errors": 1}, "provenance": "executed"}
+
+
+def _canary_items(capsule):
+    return {s["id"]: [i for i in s["items"] if i["source"] == "canary.json"] for s in capsule["sections"]}
+
+
+def test_without_canary_is_unchanged(inputs):
+    now = "2026-10-15T00:00:00Z"
+    assert build(*inputs, now=now) == build(*inputs, now=now, canary=None)
+    assert not any(_canary_items(build(*inputs, now=now)).values())
+
+
+def test_canary_detected(inputs):
+    capsule = build(*inputs, canary=CANARY)
+    items = _canary_items(capsule)
+    assert len(items["8"]) == 1 and items["8"][0]["provenance"] == "executed"
+    assert items["8"][0]["text"] == (
+        "Verifier self-check (negative control): removed click from requirements.txt in a sandbox copy; "
+        "verdict regressed; the verifier detected the breakage: yes "
+        "(before 9 passed, 1 failed, 0 errors; after 0 passed, 0 failed, 1 errors).")
+    assert not items["9"] and not items["10"]
+    assert validate_capsule(capsule) == []
+    glance = render_markdown(capsule).split("## At a glance", 1)[1].split("## Sections", 1)[0]
+    assert "self-check" not in glance and "- p1: improved" in glance  # the canary is not a proposal result
+
+
+def test_canary_missed_is_prominent(inputs):
+    capsule = build(*inputs, canary=dict(CANARY, verdict="unchanged", detected=False))
+    items = _canary_items(capsule)
+    assert "the verifier detected the breakage: NO" in items["8"][0]["text"]
+    assert items["9"][0]["text"].startswith("WARNING: the verifier missed a known-bad change (removing click")
+    assert items["10"][0]["provenance"] == "unverified" and "missed a known-bad change" in items["10"][0]["text"]
+
+
+@pytest.mark.parametrize("canary", [
+    {"detected": None, "reason": "no suitable package", "provenance": "unverified"},
+    {"detected": None, "reason": "skipped: --no-canary was given", "provenance": "unverified"},
+])
+def test_canary_not_judged_is_unverified(inputs, canary):
+    items = _canary_items(build(*inputs, canary=canary))
+    assert items["8"][0]["provenance"] == "unverified" and canary["reason"] in items["8"][0]["text"]
+    assert items["10"][0]["provenance"] == "unverified" and not items["9"]
+
+
+REACHED = {"package": "Jinja2", "source_files": ["linkwatch/report.py"],
+           "tests_reaching": ["tests/conftest.py", "tests/test_report.py"],
+           "chain": "tests/test_report.py -> linkwatch/cli.py -> linkwatch/report.py -> jinja2",
+           "strength": "tests_reach_change", "provenance": "observed"}
+UNREACHED = {"package": "six", "source_files": [], "tests_reaching": [], "chain": None,
+             "strength": "no_test_reaches_change", "provenance": "observed"}
+
+
+def _strength_items(capsule):
+    return {s["id"]: [i for i in s["items"] if i["source"] == "strength.json"] for s in capsule["sections"]}
+
+
+def test_without_strength_is_unchanged(inputs):
+    now = "2026-10-15T00:00:00Z"
+    assert build(*inputs, now=now) == build(*inputs, now=now, strength=None)
+    assert not any(_strength_items(build(*inputs, now=now)).values())
+
+
+def test_strength_reached(inputs):
+    strength = {"schema": 1, "provenance": "observed",
+                "proposals": [{"proposal_id": "p1", "packages": ["Jinja2"], "reach": [REACHED]}]}
+    capsule = build(*inputs, strength=strength)
+    items = _strength_items(capsule)
+    assert [i["text"] for i in items["8"]] == [
+        "Evidence strength for p1: 2 test file(s) reach Jinja2: "
+        "tests/test_report.py -> linkwatch/cli.py -> linkwatch/report.py -> jinja2"]
+    assert items["8"][0]["provenance"] == "observed" and not items["10"]
+    assert validate_capsule(capsule) == []
+    glance = render_markdown(capsule).split("## At a glance", 1)[1].split("## Sections", 1)[0]
+    assert "Evidence strength" not in glance
+
+
+def test_strength_unreached_and_unknown(inputs):
+    strength = {"proposals": [{"proposal_id": "p1", "packages": ["Jinja2", "six"], "reach": [REACHED, UNREACHED]},
+                              {"proposal_id": "p2", "packages": [], "reach": []}]}
+    items = _strength_items(build(*inputs, strength=strength))
+    texts = [i["text"] for i in items["8"]]
+    assert "Evidence strength for p1: no test reaches six: the test result above cannot confirm this change" in texts
+    assert any(t.startswith("Evidence strength for p2: no changed package") for t in texts)
+    assert [i["provenance"] for i in items["8"]] == ["observed", "observed", "unverified"]
+    assert len(items["10"]) == 1 and items["10"][0]["provenance"] == "unverified"
+    assert "p1 (six)" in items["10"][0]["text"]
+
+
 def test_absolute_paths_in_first_error_are_omitted(inputs):
     evidence, baseline, proposals, verify = copy.deepcopy(inputs)
     raw_error = (

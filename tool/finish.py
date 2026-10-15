@@ -15,9 +15,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import baseline as baseline_mod
+from . import canary as canary_mod
 from . import capsule as capsule_mod
 from . import proposals as proposals_mod
 from . import report_html, scan as scan_mod
+from . import strength as strength_mod
 from . import verify as verify_mod
 
 ORIGIN_AGENT = "agent-written"
@@ -125,8 +127,12 @@ def _agent_proposals(path, evidence, repo):
 
 def finish(repo, out_dir, python="3.12", *, model=proposals_mod.DEFAULT_MODEL,
            base_url=proposals_mod.DEFAULT_BASE_URL, scan_fn=scan_mod.scan, baseline_fn=baseline_mod.run,
-           propose_fn=proposals_mod.propose, verify_fn=verify_mod.run, now=None):
-    """Run the rest of the flow and write every output into out_dir. Returns the run.json dict."""
+           propose_fn=proposals_mod.propose, verify_fn=verify_mod.run, now=None, canary=True):
+    """Run the rest of the flow and write every output into out_dir. Returns the run.json dict.
+
+    With canary=True (the default; --no-canary turns it off) a known-bad change is run through the same
+    verifier after the real proposals, to show the verifier can report a regression.
+    """
     started, start = _now(), time.perf_counter()
     out, steps = Path(out_dir), Steps()
     out.mkdir(parents=True, exist_ok=True)
@@ -177,6 +183,18 @@ def finish(repo, out_dir, python="3.12", *, model=proposals_mod.DEFAULT_MODEL,
         verify_result = ran if ran is not None else verify_result
     _write_json(out / "verify.json", verify_result)
 
+    # 3b. canary: a negative control through the same verifier; never a proposal, never a fix
+    canary_result = _run_canary(canary, repo, evidence, baseline, verify_result, out, python, verify_fn, steps)
+    _write_json(out / "canary.json", canary_result)  # always written, so a stale file never survives
+
+    # 3c. strength: does any test even import what each verified proposal changed? (static, observed)
+    strength_result = {"schema": 1, "provenance": "observed", "proposals": []}
+    if verify_result["results"]:
+        ran = steps.run("strength", f"strength.for_proposals({repo}, ...)", strength_mod.for_proposals,
+                        repo, evidence, used, verify_result)
+        strength_result = ran if ran is not None else strength_result
+    _write_json(out / "strength.json", strength_result)
+
     # 4. capsule (json, md, html)
     agent = "Hermes Agent (Nous Research)" if origin == ORIGIN_AGENT else "none (direct call by DepDoctor)"
     model_info = {"name": (used or {}).get("model") or model, "agent": agent}
@@ -187,8 +205,10 @@ def finish(repo, out_dir, python="3.12", *, model=proposals_mod.DEFAULT_MODEL,
         paths["proposals"] = proposals_file
     elif used is not None:
         paths["proposals"] = agent_file
+    paths["canary"], paths["strength"] = out / "canary.json", out / "strength.json"
     capsule = steps.run("capsule", f"python -m tool capsule --out-dir {out}", capsule_mod.build,
-                        evidence, baseline, used, verify_result, now=now, model_info=model_info)
+                        evidence, baseline, used, verify_result, now=now, model_info=model_info,
+                        canary=canary_result, strength=strength_result)
     if capsule is not None:
         notes = [f"Proposal origin: {origin}.", f"Model name source: {model_source}."]
         if not accepted:
@@ -208,6 +228,7 @@ def finish(repo, out_dir, python="3.12", *, model=proposals_mod.DEFAULT_MODEL,
                    "tool": platform.python_version()},
         "started_at": started, "finished_at": _now(), "total_seconds": round(time.perf_counter() - start, 2),
         "steps": steps.items,
+        "canary": {k: canary_result.get(k) for k in ("package", "verdict", "expected", "detected", "reason")},
         "outputs": {k: str(v) for k, v in paths.items() if Path(v).is_file() or k == "run"},
     }
     _write_json(paths["run"], run)
@@ -218,6 +239,40 @@ def finish(repo, out_dir, python="3.12", *, model=proposals_mod.DEFAULT_MODEL,
     before = _counts(baseline)
     for r in verify_result["results"]:
         print(f"{r.get('proposal_id')}: {r.get('verdict')} (before {before}; after {_counts(r.get('after'))})")
+    for p in strength_result["proposals"]:
+        for entry in p["reach"]:
+            reached = f"{len(entry['tests_reaching'])} test file(s), e.g. {entry['chain']}" if entry["chain"] \
+                else "no test reaches it"
+            print(f"strength {p['proposal_id']}: {entry['package']}: {reached}")
     if not verify_result["results"]:
         print("no proposal was verified")
+    print(canary_line(canary_result))
     return run
+
+
+def canary_line(c):
+    if c.get("detected") is None:
+        return f"canary: not judged ({c.get('reason')})"
+    return (f"canary: removed {c.get('package')}, verdict {c.get('verdict')}, "
+            f"detected {'yes' if c['detected'] else 'NO'}")
+
+
+def _run_canary(enabled, repo, evidence, baseline, verify_result, out, python, verify_fn, steps):
+    """Run the canary when it can calibrate something; otherwise return an unverified note.
+
+    Always returns a dict, so the capsule can say why the self-check is missing.
+    """
+    def skipped(reason):
+        return {"package": None, "verdict": None, "expected": canary_mod.EXPECTED, "detected": None,
+                "reason": reason, "provenance": "unverified"}
+
+    if not enabled:
+        return skipped("skipped: --no-canary was given")
+    if evidence is None or baseline is None:
+        return skipped("skipped: no evidence or baseline")
+    if not verify_result["results"]:
+        return skipped("skipped: no proposal was verified, so there is no verdict to calibrate")
+    workdir = out / ".sandbox" / "canary"
+    result = steps.run("canary", f"canary.run_canary({repo}, workdir={workdir}, python={python})",
+                       canary_mod.run_canary, repo, evidence, baseline, workdir, python, verify_run=verify_fn)
+    return result or skipped("canary step failed; see run.json steps")
