@@ -127,3 +127,42 @@ def test_missing_attempts_is_omitted(inputs):
     analysis = next(i for i in capsule["sections"][4]["items"] if i["provenance"] == "ai_generated")
     assert "attempts:" not in analysis["text"]
     assert "attempts: not recorded" not in analysis["text"]
+
+
+def test_install_summary_uses_success_line_or_trimmed_last_line(inputs):
+    evidence, baseline, proposals, verify = copy.deepcopy(inputs)
+    baseline["install"]["output_tail"] = (
+        "Collecting pytest\n"
+        "15.0.0-py3-none-any.whl (310 kB)\n"
+        "Using cached pytest-9.1.1-py3-none-any.whl\n"
+        "Successfully installed Jinja2-2.11.3 MarkupSafe-3.0.4\n"
+        "extra trailing detail\n"
+    )
+    capsule = build(evidence, baseline, proposals, verify)
+    item = next(i for i in capsule["sections"][1]["items"] if i["source"] == "baseline.json#install")
+    assert item["text"] == "Install exit code 0; Successfully installed Jinja2-2.11.3 MarkupSafe-3.0.4"
+    assert item["provenance"] == "executed"
+
+    baseline["install"]["exit_code"] = 1
+    baseline["install"]["output_tail"] = "Downloading archive\n" + ("x" * 350) + "\n\n"
+    capsule = build(evidence, baseline, proposals, verify)
+    item = next(i for i in capsule["sections"][1]["items"] if i["source"] == "baseline.json#install")
+    assert item["text"] == "Install exit code 1; " + ("x" * 300)
+    assert len(item["text"].split("; ", 1)[1]) == 300
+
+
+def test_absolute_paths_in_first_error_are_omitted(inputs):
+    evidence, baseline, proposals, verify = copy.deepcopy(inputs)
+    raw_error = (
+        "ImportError: failed (C:\\Users\\runner\\site-packages\\markupsafe\\__init__.py) "
+        "and (/opt/venv/lib/python3.12/site-packages/markupsafe.py)"
+    )
+    baseline["pytest"]["failures"][0]["first_error"] = raw_error
+    capsule = build(evidence, baseline, proposals, verify)
+    assert baseline["pytest"]["failures"][0]["first_error"] == raw_error
+    item = next(i for i in capsule["sections"][0]["items"] if i["source"].startswith("baseline.json#pytest.failures"))
+    assert item["text"].endswith("failed (path omitted) and (path omitted)")
+    markdown = render_markdown(capsule)
+    assert "(path omitted)" in markdown
+    assert "C:\\Users\\runner\\site-packages" not in markdown
+    assert "/opt/venv/lib/python3.12" not in markdown

@@ -17,6 +17,26 @@ SECTION_TITLES = [
     "Unresolved concerns and limitations",
 ]
 MODEL_DEFAULT = {"source": "Ollama, local", "agent": "Hermes Agent (Nous Research)", "license": "Apache-2.0"}
+ABSOLUTE_PAREN_PATH = re.compile(r"\((?:[A-Za-z]:[\\/]|/)[^()]*\)")
+
+
+def _omit_absolute_parenthesized_paths(text: str) -> str:
+    return ABSOLUTE_PAREN_PATH.sub("(path omitted)", text)
+
+
+def _install_summary(install: Any) -> str:
+    install = install if isinstance(install, dict) else {}
+    summary = f"Install exit code {install.get('exit_code', 'not recorded')}"
+    output = install.get("output_tail")
+    if not isinstance(output, str):
+        return summary
+    lines = output.splitlines()
+    success = [line.strip() for line in lines if line.strip().startswith("Successfully installed")]
+    last_nonempty = next((line.strip() for line in reversed(lines) if line.strip()), "")
+    detail = success[-1] if success else last_nonempty
+    if detail:
+        summary += "; " + detail[:300]
+    return summary
 
 
 def _items(section: dict, entries: list[tuple[str, str, str]]) -> None:
@@ -51,7 +71,7 @@ def build(evidence, baseline, proposals, verify, *, now=None, model_info=None) -
         stamp = stamp.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     sections = [{"id": str(i), "title": title, "items": []} for i, title in enumerate(SECTION_TITLES, 1)]
     s = sections
-    def add(n, text, prov, source): s[n-1]["items"].append({"text": str(text), "provenance": prov, "source": source})
+    def add(n, text, prov, source): s[n-1]["items"].append({"text": _omit_absolute_parenthesized_paths(str(text)), "provenance": prov, "source": source})
     if not model_name: add(5, "Model name was not recorded in proposals or model_info.", "unverified", "proposals.json#model")
     for name, value in (("evidence", evidence), ("baseline", baseline), ("proposals", proposals), ("verify", verify)):
         if value is None: add(10, f"Input {name} is missing or invalid.", "unverified", f"{name}.json")
@@ -78,7 +98,7 @@ def build(evidence, baseline, proposals, verify, *, now=None, model_info=None) -
     if baseline:
         add(2, f"Baseline used Python {_get(baseline,'python',default='version not recorded')}.", "executed", "baseline.json#python")
         ins=_get(baseline,"install",default={}) or {}
-        add(2, f"Install {'succeeded' if ins.get('exit_code') == 0 else 'failed or status unavailable'}; output: {ins.get('output_tail','not recorded')}", "executed", "baseline.json#install")
+        add(2, _install_summary(ins), "executed", "baseline.json#install")
         add(2, f"pip check: {_get(baseline,'pip_check',default='not recorded')}", "executed", "baseline.json#pip_check")
     if not s[1]["items"]: add(2,"not available","unverified","inputs")
 
@@ -205,7 +225,7 @@ def render_markdown(capsule) -> str:
     for sec in capsule["sections"]:
         lines += [f"## {sec['id']}. {sec['title']}", ""]
         for item in sec["items"]:
-            text=item["text"].replace("\n","\n  ")
+            text=_omit_absolute_parenthesized_paths(item["text"]).replace("\n","\n  ")
             lines.append(f"- [{item['provenance']}] {text}")
             if "diff" in item: lines.extend(["", "  ```diff", item["diff"].rstrip(), "  ```"])
         lines.append("")
