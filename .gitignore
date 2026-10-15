@@ -17,3 +17,5 @@ status.html
 /capsule.json
 .env
 .sandbox/
+/out/
+/demo_out/
