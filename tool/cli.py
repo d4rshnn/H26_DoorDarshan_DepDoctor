@@ -37,12 +37,29 @@ def cmd_check_proposals(args):
 def cmd_propose(args):
     from .proposals import propose
 
-    result = propose(args.evidence, args.out, model=args.model, base_url=args.base_url, repo_path=args.repo)
+    result = propose(args.evidence, args.out, model=args.model, base_url=args.base_url, repo_path=args.repo,
+                     baseline_path=args.baseline)
     print(f"wrote {args.out}: {len(result['proposals'])} accepted, {len(result['rejected'])} rejected, "
           f"{result['attempts']} attempt(s)")
     if result.get("error"):
         print(f"error: {result['error']}", file=sys.stderr)
     return 0 if result["proposals"] else 1
+
+
+def cmd_verify(args):
+    import json
+    from pathlib import Path
+
+    from . import verify
+
+    proposals = json.loads(Path(args.proposals).read_text(encoding="utf-8"))
+    before = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
+    result = verify.run(args.repo, proposals, before, args.workdir, python=args.python)
+    Path(args.out).write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    for r in result["results"]:
+        print(f"{r['proposal_id']}: {r['verdict']} - {r['reason']}")
+    print(f"wrote {args.out}: {len(result['results'])} proposal(s) verified")
+    return 0
 
 
 def build_parser():
@@ -70,7 +87,17 @@ def build_parser():
     prop.add_argument("--base-url", default=DEFAULT_BASE_URL, help="local OpenAI-style endpoint "
                       f"(default: {DEFAULT_BASE_URL}); only localhost is allowed")
     prop.add_argument("--repo", help="repo path (default: repo.path from the evidence)")
+    prop.add_argument("--baseline", help="baseline.json; its failing tests are put first in the prompt")
     prop.set_defaults(func=cmd_propose)
+
+    ver = sub.add_parser("verify", help="apply each proposal to a sandbox copy, re-run the tests, compare")
+    ver.add_argument("repo", help="path to the repo (never modified)")
+    ver.add_argument("proposals", help="proposals.json (only accepted proposals are run)")
+    ver.add_argument("baseline", help="baseline.json to compare against")
+    ver.add_argument("--out", default="verify.json", help="output file (default: verify.json)")
+    ver.add_argument("--workdir", default=".sandbox/verify", help="sandbox folder (default: .sandbox/verify)")
+    ver.add_argument("--python", default="3.12", help="Python version for the test venv (default: 3.12)")
+    ver.set_defaults(func=cmd_verify)
 
     return parser
 

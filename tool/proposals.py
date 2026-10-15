@@ -271,15 +271,40 @@ MAX_FILE_CHARS = 3000
 MAX_TOTAL_CHARS = 9000
 
 
-def build_prompt(evidence, repo_path):
-    """Compact user message: the refs for flagged problems plus the files a fix would touch."""
+BASELINE_INSTRUCTION = ("The proposals must target these failing tests first; do not propose changes "
+                        "unrelated to them unless they are clearly the cause.")
+MAX_ERROR_CHARS = 300
+
+
+def baseline_failures(baseline):
+    """The failing tests recorded in a baseline.json dict (empty if none or missing)."""
+    return ((baseline or {}).get("pytest") or {}).get("failures") or []
+
+
+def build_baseline_section(baseline):
+    """Prompt lines for the baseline run: failing tests first, so the model aims at them."""
+    failures = baseline_failures(baseline)
+    if not failures:
+        return ["BASELINE: no failing tests were recorded."]
+    lines = ["FAILING TESTS (from the baseline test run, executed before any change)"]
+    for f in failures:
+        lines.append(f"- {f.get('test')}: {str(f.get('first_error') or '')[:MAX_ERROR_CHARS]}")
+    lines.append(BASELINE_INSTRUCTION)
+    lines.append("Test names are not evidence refs; cite refs from the EVIDENCE list.\n")
+    return lines
+
+
+def build_prompt(evidence, repo_path, baseline=None):
+    """Compact user message: failing tests (if a baseline is given), the refs for flagged problems
+    and the files a fix would touch."""
     flagged = {d["package"].lower() for d in evidence.get("drift", [])}
     flagged |= {u["package"].lower() for u in evidence.get("unused", [])}
     flagged |= {c["package"].lower() for c in evidence.get("candidates", [])}
     private_files = {p["file"] for p in evidence.get("private_api", [])}
     undeclared_files = {u["file"] for u in evidence.get("undeclared", [])}
 
-    lines = ["EVIDENCE ([ref] fact)"]
+    lines = build_baseline_section(baseline) if baseline is not None else []
+    lines.append("EVIDENCE ([ref] fact)")
     files = []
     for m in evidence.get("manifests", []):
         if m["package"].lower() in flagged:
@@ -317,16 +342,22 @@ def build_prompt(evidence, repo_path):
 
 
 def propose(evidence_path, out_path, model=DEFAULT_MODEL, base_url=DEFAULT_BASE_URL,
-            repo_path=None, http=http_post_json):
-    """Ask the local model for proposals, validate them, retry once, write out_path. Return the result."""
+            repo_path=None, http=http_post_json, baseline_path=None):
+    """Ask the local model for proposals, validate them, retry once, write out_path. Return the result.
+
+    With baseline_path, the failing tests from that baseline.json are put first in the prompt.
+    """
     check_local(base_url)
     evidence = json.loads(Path(evidence_path).read_text(encoding="utf-8"))
+    baseline = json.loads(Path(baseline_path).read_text(encoding="utf-8")) if baseline_path else None
     repo_path = repo_path or evidence["repo"]["path"]
     url = base_url.rstrip("/") + "/chat/completions"
     messages = [{"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_prompt(evidence, repo_path)}]
+                {"role": "user", "content": build_prompt(evidence, repo_path, baseline)}]
     result = {"schema": 1, "model": model, "provenance": "ai_generated", "attempts": 0,
               "proposals": [], "rejected": []}
+    if baseline is not None:
+        result["baseline_failures"] = [f.get("test") for f in baseline_failures(baseline)]
 
     # Thinking is switched off: on Ollama's default 4096-token context the reasoning alone can use up
     # the window and leave an empty reply. The retry re-sends only the original prompt plus the

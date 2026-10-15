@@ -226,6 +226,43 @@ def test_propose_gives_up_after_one_retry(evidence_file, tmp_path):
     assert result["rejected"][1]["raw"] == "still no idea"
 
 
+def test_propose_with_baseline_puts_failures_in_prompt(evidence_file, tmp_path):
+    fake = FakeModel(json.dumps(GOOD))
+    result = run(evidence_file, tmp_path, fake, baseline_path=FIXTURES / "baseline.json")
+    assert [p["id"] for p in result["proposals"]] == ["p1"]
+    assert result["baseline_failures"] == ["tests/test_report.py::test_report_renders_all_sites"]
+    prompt = fake.calls[0][1]["messages"][1]["content"]
+    assert ("- tests/test_report.py::test_report_renders_all_sites: "
+            "ImportError: cannot import name 'soft_unicode' from 'markupsafe'") in prompt
+    assert P.BASELINE_INSTRUCTION in prompt
+    assert prompt.index("FAILING TESTS") < prompt.index("EVIDENCE")
+
+
+def test_propose_without_baseline_has_no_baseline_section(evidence_file, tmp_path):
+    fake = FakeModel(json.dumps(GOOD))
+    result = run(evidence_file, tmp_path, fake)
+    assert [p["id"] for p in result["proposals"]] == ["p1"] and "baseline_failures" not in result
+    prompt = fake.calls[0][1]["messages"][1]["content"]
+    assert "FAILING TESTS" not in prompt and P.BASELINE_INSTRUCTION not in prompt
+    assert prompt.startswith("EVIDENCE")
+
+
+def test_baseline_without_failures(evidence_file, tmp_path):
+    passing = tmp_path / "baseline.json"
+    passing.write_text(json.dumps({"schema": 1, "pytest": {"exit_code": 0, "passed": 10, "failures": []}}))
+    fake = FakeModel(json.dumps(GOOD))
+    result = run(evidence_file, tmp_path, fake, baseline_path=passing)
+    assert result["baseline_failures"] == []
+    assert "no failing tests" in fake.calls[0][1]["messages"][1]["content"]
+
+
+def test_cli_propose_accepts_baseline_flag():
+    from tool.cli import build_parser
+    args = build_parser().parse_args(["propose", "evidence.json", "--baseline", "baseline.json"])
+    assert args.baseline == "baseline.json"
+    assert build_parser().parse_args(["propose", "evidence.json"]).baseline is None
+
+
 def test_propose_explains_cut_off_reply(evidence_file, tmp_path):
     result = run(evidence_file, tmp_path, FakeModel("", "", finish="length"))
     assert "ran out of context" in result["error"]
