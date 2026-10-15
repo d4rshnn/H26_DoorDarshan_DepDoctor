@@ -7,3 +7,13 @@ dist/
 .venv/
 venv/
 status.html
+
+# DepDoctor outputs and sandboxes (anchored so tests_tool/fixtures stays tracked)
+/evidence.json
+/baseline.json
+/verify.json
+/proposals.json
+/capsule.md
+/capsule.json
+.env
+.sandbox/

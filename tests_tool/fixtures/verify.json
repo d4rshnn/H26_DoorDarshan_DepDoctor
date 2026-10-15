@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "_fixture": "hand-made example in the contract shape; not output of a real verify run",
+  "results": [
+    {
+      "proposal_id": "p1",
+      "applied_diff": "--- a/requirements.txt\n+++ b/requirements.txt\n@@ -4 +4 @@\n-Jinja2==2.11.3\n+Jinja2>=3.1,<4\n",
+      "apply_ok": true,
+      "after": {
+        "schema": 1,
+        "python": "3.12.x",
+        "install": {"exit_code": 0, "output_tail": "..."},
+        "pytest": {"exit_code": 0, "passed": 10, "failed": 0, "errors": 0, "failures": []},
+        "pip_check": "No broken requirements found.",
+        "provenance": "executed"
+      },
+      "fixed_tests": ["tests/test_report.py::test_report_renders_all_sites"],
+      "newly_broken_tests": [],
+      "verdict": "improved",
+      "provenance": "executed"
+    }
+  ]
+}

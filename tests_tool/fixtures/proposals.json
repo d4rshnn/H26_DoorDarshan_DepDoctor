@@ -1,0 +1,16 @@
+{
+  "_fixture": "hand-made example of what the AI step should produce",
+  "proposals": [
+    {
+      "id": "p1",
+      "problem": "Jinja2 2.11.3 cannot import with MarkupSafe 3.x, so the report command and one test fail",
+      "kind": "version_change",
+      "evidence_refs": ["usage:linkwatch/report.py:3", "manifest:requirements.txt:4"],
+      "changes": [
+        {"file": "requirements.txt", "action": "replace_line", "old": "Jinja2==2.11.3", "new": "Jinja2>=3.1,<4"}
+      ],
+      "rationale": "Jinja2 3.x no longer imports soft_unicode from markupsafe.",
+      "risk": "Template behaviour could differ; only one template exists and one test renders it."
+    }
+  ]
+}

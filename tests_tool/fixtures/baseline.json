@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "_fixture": "hand-made example in the contract shape; the counts match a real run of LinkWatch on Python 3.12",
+  "python": "3.12.x",
+  "install": {"exit_code": 0, "output_tail": "Successfully installed Jinja2-2.11.3 MarkupSafe-3.0.4 ..."},
+  "pytest": {
+    "exit_code": 1,
+    "passed": 9,
+    "failed": 1,
+    "errors": 0,
+    "failures": [
+      {"test": "tests/test_report.py::test_report_renders_all_sites",
+       "first_error": "ImportError: cannot import name 'soft_unicode' from 'markupsafe'"}
+    ]
+  },
+  "pip_check": "No broken requirements found.",
+  "provenance": "executed"
+}

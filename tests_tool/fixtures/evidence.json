@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "_fixture": "hand-made example in the contract shape, using facts observed in LinkWatch commit f52f393",
+  "repo": {"path": "target", "commit": "f52f393", "python_requires": ">=3.10", "python_mentioned": ["3.12"]},
+  "manifests": [
+    {"file": "requirements.txt", "package": "toml", "specifier": "==0.10.2", "line": 1, "provenance": "observed"},
+    {"file": "requirements.txt", "package": "Jinja2", "specifier": "==2.11.3", "line": 4, "provenance": "observed"},
+    {"file": "requirements.txt", "package": "pydantic", "specifier": "==1.10.13", "line": 5, "provenance": "observed"},
+    {"file": "pyproject.toml", "package": "Jinja2", "specifier": "==2.11.3", "line": 16, "provenance": "observed"},
+    {"file": "pyproject.toml", "package": "pydantic", "specifier": ">=2", "line": 17, "provenance": "observed"}
+  ],
+  "drift": [
+    {"package": "pydantic", "details": {"pyproject.toml": ">=2", "requirements.txt": "==1.10.13"}, "provenance": "observed"}
+  ],
+  "usage": [
+    {"package": "toml", "import": "toml", "file": "linkwatch/config.py", "line": 3, "names": ["toml"], "provenance": "observed"},
+    {"package": "Jinja2", "import": "jinja2", "file": "linkwatch/report.py", "line": 3, "names": ["Environment", "FileSystemLoader", "select_autoescape"], "provenance": "observed"},
+    {"package": "setuptools", "import": "pkg_resources", "file": "linkwatch/resources.py", "line": 1, "names": ["pkg_resources"], "provenance": "observed"}
+  ],
+  "undeclared": [
+    {"import": "certifi", "file": "linkwatch/checker.py", "line": 4, "provenance": "observed"}
+  ],
+  "unused": [
+    {"package": "six", "provenance": "observed"}
+  ],
+  "private_api": [
+    {"module": "requests.utils", "name": "_parse_content_type_header", "file": "linkwatch/encoding.py", "line": 5, "provenance": "observed"}
+  ],
+  "candidates": [
+    {"id": "c1", "package": "toml", "hint": "tomllib is in the standard library from Python 3.11", "provenance": "hint"},
+    {"id": "c2", "package": "Jinja2", "hint": "Jinja2 2.x imports markupsafe.soft_unicode, removed in MarkupSafe 2.1; Jinja2 3.x does not", "provenance": "hint"}
+  ]
+}
