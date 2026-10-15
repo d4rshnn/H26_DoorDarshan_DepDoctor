@@ -62,6 +62,41 @@ def cmd_verify(args):
     return 0
 
 
+def cmd_capsule(args):
+    from . import capsule
+
+    inputs = (capsule.load_json(p) for p in (args.evidence, args.baseline, args.proposals, args.verify))
+    result = capsule.build(*inputs, model_info={"name": args.model} if args.model else None)
+    for path in capsule.write(result, args.out_dir):
+        print(f"wrote {path}")
+    return 0
+
+
+def cmd_report(args):
+    from . import capsule, report_html
+
+    data = capsule.load_json(args.capsule)
+    if data is None:
+        raise ValueError(f"could not read {args.capsule}")
+    report_html.write(data, args.out)
+    print(f"wrote {args.out}")
+    return 0
+
+
+def cmd_analyze(args):
+    from .finish import analyze
+
+    result = analyze(args.repo, args.out_dir, python=args.python)
+    return 0 if result["evidence"] is not None and result["baseline"] is not None else 1
+
+
+def cmd_finish(args):
+    from .finish import finish
+
+    run = finish(args.repo, args.out_dir, python=args.python, model=args.model, base_url=args.base_url)
+    return 0 if "capsule_json" in run["outputs"] else 1
+
+
 def build_parser():
     from .proposals import DEFAULT_BASE_URL, DEFAULT_MODEL
 
@@ -98,6 +133,32 @@ def build_parser():
     ver.add_argument("--workdir", default=".sandbox/verify", help="sandbox folder (default: .sandbox/verify)")
     ver.add_argument("--python", default="3.12", help="Python version for the test venv (default: 3.12)")
     ver.set_defaults(func=cmd_verify)
+
+    cap = sub.add_parser("capsule", help="build capsule.json and capsule.md from the stage outputs")
+    for name in ("evidence", "baseline", "proposals", "verify"):
+        cap.add_argument(f"--{name}", help=f"{name}.json (missing inputs are reported as unverified)")
+    cap.add_argument("--out-dir", default=".", help="folder for capsule.json and capsule.md (default: .)")
+    cap.add_argument("--model", help="model name, if proposals.json does not record one")
+    cap.set_defaults(func=cmd_capsule)
+
+    rep = sub.add_parser("report", help="render capsule.json as a self-contained HTML page")
+    rep.add_argument("capsule", help="capsule.json")
+    rep.add_argument("--out", default="capsule.html", help="output file (default: capsule.html)")
+    rep.set_defaults(func=cmd_report)
+
+    ana = sub.add_parser("analyze", help="scan + baseline; print failing tests and valid evidence refs")
+    ana.add_argument("repo", help="path to the repo (never modified)")
+    ana.add_argument("--out-dir", default="out", help="output folder (default: out)")
+    ana.add_argument("--python", default="3.12", help="Python version for the test venv (default: 3.12)")
+    ana.set_defaults(func=cmd_analyze)
+
+    fin = sub.add_parser("finish", help="validate or generate proposals, verify, write the capsule and run.json")
+    fin.add_argument("repo", help="path to the repo (never modified)")
+    fin.add_argument("--out-dir", default="out", help="output folder (default: out)")
+    fin.add_argument("--python", default="3.12", help="Python version for the test venv (default: 3.12)")
+    fin.add_argument("--model", default=DEFAULT_MODEL, help=f"model for the fallback call (default: {DEFAULT_MODEL})")
+    fin.add_argument("--base-url", default=DEFAULT_BASE_URL, help="local model endpoint; only localhost is allowed")
+    fin.set_defaults(func=cmd_finish)
 
     return parser
 
