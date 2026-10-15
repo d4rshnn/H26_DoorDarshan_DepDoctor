@@ -20,6 +20,8 @@ report the results honestly.
 - Always run the tool with `py -3.12` (not `python`): the target does not support Python 3.14.
 - If a command fails, show the error text and stop. Do not retry more than once.
 - Run commands from the DepDoctor repository folder. TARGET below is the path the user gave you.
+- The terminal swallows backslashes. Always write paths with forward slashes, for example
+  C:/Users/name/LinkWatch_target, never C:\Users\name\LinkWatch_target.
 
 ## Steps
 

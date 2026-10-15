@@ -41,16 +41,16 @@ DepDoctor uses a local Ollama endpoint. **No API keys are needed anywhere.**
 
 ## Usage instructions
 
-Run commands from the DepDoctor repository root. Replace `<LinkWatch-path>` with the path to the separate LinkWatch clone. `scan`, `check-proposals`, `propose`, and `verify` are present in the inspected CLI. The `analyze` and `finish` commands are part of the intended workflow but were not present in that CLI; see **COMMANDS I COULD NOT VERIFY** below.
+Run commands from the DepDoctor repository root. Replace `<LinkWatch-path>` with the path to the separate LinkWatch clone. The target repository is never modified.
 
 ```powershell
 py -3.12 -m tool analyze <LinkWatch-path> --out-dir out
 py -3.12 -m tool finish <LinkWatch-path> --out-dir out
 ```
 
-The intended `analyze` step scans and runs the baseline. `finish` proposes fixes if needed, validates them, verifies them in sandbox copies, and creates the capsule and HTML report. The output directory is intended to contain `capsule.json`, `capsule.md`, and `capsule.html`.
+`analyze` scans the repository and runs its tests in a clean environment (the baseline). `finish` uses `out/proposals.json` if it holds valid proposals (written by an agent such as Hermes); otherwise it asks the local model directly. It then validates the proposals, verifies each in a sandbox copy, and writes `capsule.json`, `capsule.md`, `capsule.html` and `run.json` into the output folder. Open `out/capsule.html` in a browser to read the report.
 
-The individual available stages are:
+The individual stages are:
 
 ```powershell
 py -3.12 -m tool scan <LinkWatch-path> --out evidence.json
@@ -58,18 +58,19 @@ py -3.12 -m tool.baseline <LinkWatch-path> --out baseline.json --workdir .sandbo
 py -3.12 -m tool propose evidence.json --out proposals.json --repo <LinkWatch-path> --baseline baseline.json
 py -3.12 -m tool check-proposals proposals.json --evidence evidence.json --repo <LinkWatch-path>
 py -3.12 -m tool verify <LinkWatch-path> proposals.json baseline.json --out verify.json
-py -3.12 -m tool.capsule --evidence evidence.json --baseline baseline.json --proposals proposals.json --verify verify.json --out-dir out
+py -3.12 -m tool capsule --evidence evidence.json --baseline baseline.json --proposals proposals.json --verify verify.json --out-dir out
+py -3.12 -m tool report out/capsule.json --out out/capsule.html
 ```
 
-The standalone capsule command writes `capsule.json` and `capsule.md`; HTML output belongs to the intended `finish` workflow and is not produced by this command. Read a capsule by checking the provenance label on every item: `observed` means read from files, `executed` means command output, `ai_generated` means a model suggestion, `hint` means a built-in lead, and `unverified` means unchecked or missing information.
+Read a capsule by checking the provenance label on every item: `observed` means read from files, `executed` means command output, `ai_generated` means a model suggestion, `hint` means a built-in lead, and `unverified` means unchecked or missing information.
 
-To ask Hermes to run the skill, the project workflow specifies:
+To ask Hermes to run the skill (after copying `skill/depdoctor/` into the Hermes skills folder):
 
 ```powershell
 hermes chat -s depdoctor --query-file ask.txt --oneshot -Q -t terminal,file --in <this repo>
 ```
 
-This Hermes invocation has not been checked in this environment; see **COMMANDS I COULD NOT VERIFY** below.
+`ask.txt` holds a one-line request naming the target path. <FILL IN: result of the Hermes run once tested>
 
 Run DepDoctor's tests with:
 
@@ -90,7 +91,7 @@ validate (deterministic safety and evidence checks)
 verify (apply accepted proposals to sandbox copies and re-run tests)
   -> verify.json
 capsule (merge labelled evidence and results)
-  -> capsule.json + capsule.md [and capsule.html in the intended finish workflow]
+  -> capsule.json + capsule.md + capsule.html
 ```
 
 | Step | Implementation | Uses AI? |
@@ -124,7 +125,7 @@ DepDoctor itself uses only the Python standard library. External tools are Ollam
 - The scanner skips unparseable Python files.
 - Security vulnerabilities are out of scope.
 - A model call takes about 45 seconds on a laptop without a GPU (reported project experience; this is not a timing guarantee).
-- Hermes multi-step reliability with a small model is limited. `finish` is intended to fall back to a direct local-model call when no valid `proposals.json` exists; the command was not available to verify in the inspected CLI.
+- Hermes multi-step reliability with a small model is limited. `finish` falls back to a direct local-model call when no valid `proposals.json` exists.
 - The tool installs packages with pip inside throwaway environments, so that step needs network access.
 - Windows is the tested platform.
 

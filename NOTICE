@@ -1,0 +1,13 @@
+DepDoctor
+Copyright (c) 2026 the H26 DoorDarshan team (Darshan Mahale, Aarya Burande, Leena)
+
+The DepDoctor additions in this repository (tool/, tests_tool/, skill/, demo/, README.md, NOTICE)
+are released under the MIT License, the same terms as the LICENSE file.
+
+This repository is a fork of LinkWatch by rishrek (MIT License, Copyright (c) 2022 linkwatch contributors),
+the target project supplied by the organisers. The original LinkWatch files (linkwatch/, tests/, sites.toml,
+Dockerfile, Makefile, pyproject.toml, requirements*.txt) are unchanged and remain under their original licence.
+The original README is kept as TARGET_README.md.
+
+Third-party software used at run time (not included in this repository):
+Hermes Agent (Nous Research), Ollama, Gemma 4 (Google DeepMind), pytest.
