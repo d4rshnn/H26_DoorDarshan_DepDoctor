@@ -9,6 +9,7 @@
 
 .PARAMETER Target
     Path to the target repository to inspect (default: D:\Hackathons\LinkWatch_target).
+    Supports paths containing spaces.
 
 .PARAMETER Out
     Directory where output artifacts and capsule files will be stored (default: $env:TEMP\depdoctor_demo).
@@ -23,7 +24,7 @@
     .\demo\run_demo.ps1 -Target "D:\Hackathons\LinkWatch_target"
 
 .EXAMPLE
-    .\demo\run_demo.ps1 -Target "D:\Hackathons\LinkWatch_target" -SkipPreflight
+    .\demo\run_demo.ps1 -Target "C:\My Projects\LinkWatch target" -SkipPreflight
 #>
 
 [CmdletBinding()]
@@ -68,11 +69,11 @@ function Write-CheckFail {
 
 function Get-TargetFingerprint {
     param([string]$Path)
-    if (-not (Test-Path -Path $Path -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
         throw "Target folder '$Path' does not exist."
     }
-    $resolvedTarget = (Resolve-Path -Path $Path).Path
-    $files = Get-ChildItem -Path $resolvedTarget -Recurse -File | Where-Object {
+    $resolvedTarget = (Resolve-Path -LiteralPath $Path).Path
+    $files = Get-ChildItem -LiteralPath $resolvedTarget -Recurse -File | Where-Object {
         $_.FullName -notmatch '[\\/]\.git([\\/]|$)'
     } | Sort-Object {
         $_.FullName.Substring($resolvedTarget.Length).TrimStart('\', '/') -replace '\\', '/'
@@ -117,6 +118,7 @@ Write-Host "--------------------------------------------------------------------
 # STEP 1: Preflight checks
 # ------------------------------------------------------------------------------
 Write-Step "1" "Preflight Environment Checks" "Verifies Python runtime, target files, local Ollama model, and tool imports."
+$step1Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 $preflightPassed = $true
 
@@ -133,10 +135,10 @@ if ($SkipPreflight) {
     }
 
     # 1.2 Target folder contents check
-    if (Test-Path -Path $Target -PathType Container) {
+    if (Test-Path -LiteralPath $Target -PathType Container) {
         $lwDir = Join-Path -Path $Target -ChildPath "linkwatch"
         $reqFile = Join-Path -Path $Target -ChildPath "requirements.txt"
-        if ((Test-Path -Path $lwDir) -and (Test-Path -Path $reqFile)) {
+        if ((Test-Path -LiteralPath $lwDir) -and (Test-Path -LiteralPath $reqFile)) {
             Write-CheckOk "Target repository exists and contains linkwatch\ and requirements.txt."
         } else {
             Write-CheckFail "Target directory exists but is missing linkwatch\ or requirements.txt." "Provide a valid target clone containing linkwatch\ and requirements.txt."
@@ -173,44 +175,58 @@ if ($SkipPreflight) {
     }
 
     if (-not $preflightPassed) {
+        $step1Stopwatch.Stop()
+        Write-Host ("  [Step 1 elapsed: {0:N2} s]" -f $step1Stopwatch.Elapsed.TotalSeconds) -ForegroundColor DarkGray
         Write-Host ""
         Write-Host "Preflight validation failed. Aborting demo execution." -ForegroundColor Red
         $totalStopwatch.Stop()
         exit 1
     }
 }
+$step1Stopwatch.Stop()
+Write-Host ("  [Step 1 elapsed: {0:N2} s]" -f $step1Stopwatch.Elapsed.TotalSeconds) -ForegroundColor DarkGray
 
 # ------------------------------------------------------------------------------
 # STEP 2: Fingerprint the target BEFORE
 # ------------------------------------------------------------------------------
 Write-Step "2" "Fingerprint Target (Before)" "Computes a deterministic SHA-256 hash of all files in the target before any operation."
+$step2Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 try {
     $beforeFingerprint = Get-TargetFingerprint -Path $Target
     Write-Host "  Target SHA-256 (before): $beforeFingerprint" -ForegroundColor Green
 } catch {
+    $step2Stopwatch.Stop()
+    Write-Host ("  [Step 2 elapsed: {0:N2} s]" -f $step2Stopwatch.Elapsed.TotalSeconds) -ForegroundColor DarkGray
     Write-Host "  Error computing target fingerprint: $_" -ForegroundColor Red
     $totalStopwatch.Stop()
     exit 1
 }
+$step2Stopwatch.Stop()
+Write-Host ("  [Step 2 elapsed: {0:N2} s]" -f $step2Stopwatch.Elapsed.TotalSeconds) -ForegroundColor DarkGray
 
 # ------------------------------------------------------------------------------
 # STEP 3: Run analyze
 # ------------------------------------------------------------------------------
 Write-Step "3" "Run Analyze Stage" "Scans dependencies, runs target tests in an isolated sandbox, and records baseline failures."
+$step3Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
-if (Test-Path -Path $Out) {
+if (Test-Path -LiteralPath $Out) {
     Write-Host "  Cleaning existing output directory: $Out" -ForegroundColor Gray
-    Remove-Item -Path $Out -Recurse -Force
+    Remove-Item -LiteralPath $Out -Recurse -Force
 }
 
 $analyzeArgs = @("-$Python", "-m", "tool", "analyze", $Target, "--out-dir", $Out)
-Write-Host "  Command: py $($analyzeArgs -join ' ')" -ForegroundColor DarkGray
+Write-Host "  Command: py -$Python -m tool analyze `"$Target`" --out-dir `"$Out`"" -ForegroundColor DarkGray
 & py $analyzeArgs
 
-if ($LASTEXITCODE -ne 0) {
+$analyzeExit = $LASTEXITCODE
+$step3Stopwatch.Stop()
+Write-Host ("  [Step 3 elapsed: {0:N2} s]" -f $step3Stopwatch.Elapsed.TotalSeconds) -ForegroundColor DarkGray
+
+if ($analyzeExit -ne 0) {
     Write-Host ""
-    Write-Host "  [FAIL] Analyze stage failed with exit code $LASTEXITCODE." -ForegroundColor Red
+    Write-Host "  [FAIL] Analyze stage failed with exit code $analyzeExit." -ForegroundColor Red
     $totalStopwatch.Stop()
     exit 1
 }
@@ -220,15 +236,15 @@ Write-Host "  [OK] Analyze stage completed successfully." -ForegroundColor Green
 # STEP 4: Run finish
 # ------------------------------------------------------------------------------
 Write-Step "4" "Run Finish Stage (Propose, Validate, Verify, Capsule)" "Prompts local AI for fixes, verifies them in clean sandboxes, and compiles reports."
+$step4Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
-$finishStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $finishArgs = @("-$Python", "-m", "tool", "finish", $Target, "--out-dir", $Out)
-Write-Host "  Command: py $($finishArgs -join ' ')" -ForegroundColor DarkGray
+Write-Host "  Command: py -$Python -m tool finish `"$Target`" --out-dir `"$Out`"" -ForegroundColor DarkGray
 & py $finishArgs
 $finishExit = $LASTEXITCODE
-$finishStopwatch.Stop()
+$step4Stopwatch.Stop()
 
-Write-Host ("  Finish stage execution time: {0:mm\:ss\.ff}" -f $finishStopwatch.Elapsed) -ForegroundColor Gray
+Write-Host ("  [Step 4 elapsed: {0:N2} s]" -f $step4Stopwatch.Elapsed.TotalSeconds) -ForegroundColor DarkGray
 
 if ($finishExit -ne 0) {
     Write-Host ""
@@ -242,10 +258,14 @@ Write-Host "  [OK] Finish stage completed successfully." -ForegroundColor Green
 # STEP 5: Fingerprint the target AFTER
 # ------------------------------------------------------------------------------
 Write-Step "5" "Verify Target Immutability" "Recalculates target SHA-256 fingerprint to guarantee zero modifications occurred."
+$step5Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 $afterFingerprint = Get-TargetFingerprint -Path $Target
 Write-Host "  Target SHA-256 (before): $beforeFingerprint" -ForegroundColor Gray
 Write-Host "  Target SHA-256 (after):  $afterFingerprint" -ForegroundColor Gray
+
+$step5Stopwatch.Stop()
+Write-Host ("  [Step 5 elapsed: {0:N2} s]" -f $step5Stopwatch.Elapsed.TotalSeconds) -ForegroundColor DarkGray
 
 if ($beforeFingerprint -eq $afterFingerprint) {
     Write-Host "  Target repository unchanged: YES" -ForegroundColor Green
@@ -259,6 +279,7 @@ if ($beforeFingerprint -eq $afterFingerprint) {
 # STEP 6: Display capsule summary and open HTML report
 # ------------------------------------------------------------------------------
 Write-Step "6" "Present Verification Artifacts" "Displays capsule summary and launches the interactive visual report."
+$step6Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 $capsuleMd = Join-Path -Path $Out -ChildPath "capsule.md"
 $capsuleJson = Join-Path -Path $Out -ChildPath "capsule.json"
@@ -269,16 +290,16 @@ Write-Host "    - Markdown Capsule: $capsuleMd" -ForegroundColor Gray
 Write-Host "    - JSON Capsule:     $capsuleJson" -ForegroundColor Gray
 Write-Host "    - HTML Report:      $capsuleHtml" -ForegroundColor Gray
 
-if (Test-Path -Path $capsuleMd) {
+if (Test-Path -LiteralPath $capsuleMd) {
     Write-Host ""
     Write-Host "------------------- Capsule Markdown Preview (First 40 Lines) -------------------" -ForegroundColor DarkCyan
-    Get-Content -Path $capsuleMd -TotalCount 40
+    Get-Content -LiteralPath $capsuleMd -TotalCount 40
     Write-Host "--------------------------------------------------------------------------------" -ForegroundColor DarkCyan
 } else {
     Write-Host "  Warning: capsule.md was not found in $Out." -ForegroundColor Yellow
 }
 
-if (Test-Path -Path $capsuleHtml) {
+if (Test-Path -LiteralPath $capsuleHtml) {
     Write-Host ""
     Write-Host "  Launching capsule.html in default browser..." -ForegroundColor Green
     Start-Process -FilePath $capsuleHtml
@@ -286,12 +307,15 @@ if (Test-Path -Path $capsuleHtml) {
     Write-Host "  Warning: capsule.html was not found in $Out." -ForegroundColor Yellow
 }
 
+$step6Stopwatch.Stop()
+Write-Host ("  [Step 6 elapsed: {0:N2} s]" -f $step6Stopwatch.Elapsed.TotalSeconds) -ForegroundColor DarkGray
+
 # ------------------------------------------------------------------------------
 # STEP 7: Total elapsed time & summary
 # ------------------------------------------------------------------------------
 $totalStopwatch.Stop()
 Write-Host ""
 Write-Host "================================================================================" -ForegroundColor Cyan
-Write-Host (" Demo finished successfully! Total elapsed time: {0:mm\:ss\.ff}" -f $totalStopwatch.Elapsed) -ForegroundColor Green
+Write-Host (" [STEP 7] Demo finished successfully! Total elapsed time: {0:mm\:ss\.ff} ({1:N2} s)" -f $totalStopwatch.Elapsed, $totalStopwatch.Elapsed.TotalSeconds) -ForegroundColor Green
 Write-Host "================================================================================" -ForegroundColor Cyan
 exit 0
