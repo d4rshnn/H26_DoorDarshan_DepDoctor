@@ -324,6 +324,23 @@ def test_strength_empty_when_nothing_verified(repo, tmp_path):
     assert "Evidence strength" not in capsule_text(out)
 
 
+# ---------------------------------------------------------------- html page
+
+def test_finish_page_uses_stage_data(repo, tmp_path):
+    fakes, out = CanaryFakes(), tmp_path / "out"
+    run = run_finish(repo, out, fakes)
+    page = (out / "capsule.html").read_text(encoding="utf-8")
+    assert "Target as it is today" in page and "With the verified fix" in page
+    assert '<span class="verdict tone-good">✓ Caught</span>' in page
+    assert f"Run time: <b>{run['total_seconds']} s</b>" in page
+    assert "Proposals: <b>fallback: direct local-model call</b>" in page
+    timeline = page[page.index('id="timeline"'):page.index('id="findings"')]
+    assert "<b>verify</b>" in timeline and "<b>self-check</b>" in timeline
+    assert run["steps"][-1]["step"] == "report" and run["outputs"]["capsule_html"] == str(out / "capsule.html")
+    on_disk = json.loads((out / "run.json").read_text())
+    assert on_disk["steps"][-1]["step"] == "report" and "capsule_html" in on_disk["outputs"]
+
+
 # ---------------------------------------------------------------- cli
 
 def test_cli_capsule_and_report(tmp_path, capsys):

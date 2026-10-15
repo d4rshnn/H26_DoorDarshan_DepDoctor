@@ -78,7 +78,12 @@ def cmd_report(args):
     data = capsule.load_json(args.capsule)
     if data is None:
         raise ValueError(f"could not read {args.capsule}")
-    report_html.write(data, args.out)
+    from pathlib import Path
+
+    stage = report_html.load_stage_files(Path(args.capsule).parent)  # baseline/verify/... next to capsule.json
+    report_html.write(data, args.out, stage)
+    if stage is None:
+        print("note: no stage files next to the capsule; the page shows the capsule's own sections only")
     print(f"wrote {args.out}")
     return 0
 

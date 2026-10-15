@@ -216,10 +216,9 @@ def finish(repo, out_dir, python="3.12", *, model=proposals_mod.DEFAULT_MODEL,
         sec10 = next(s for s in capsule["sections"] if s["id"] == "10")
         sec10["items"].extend({"text": t, "provenance": "unverified", "source": "run.json"} for t in notes)
         steps.run("write capsule", f"capsule.write(..., {out})", capsule_mod.write, capsule, out)
-        steps.run("report", f"python -m tool report {paths['capsule_json']} --out {paths['capsule_html']}",
-                  report_html.write, capsule, paths["capsule_html"])
 
-    # 5. run.json and summary
+    # 5. run.json, then the HTML page (it shows the run's timings, so it is rendered from the run record).
+    # total_seconds covers everything up to the page itself; the report step is appended afterwards.
     run = {
         "schema": 1, "repo": str(Path(repo).resolve()), "out_dir": str(out.resolve()), "origin": origin,
         "agent_proposals": agent_note,
@@ -229,8 +228,14 @@ def finish(repo, out_dir, python="3.12", *, model=proposals_mod.DEFAULT_MODEL,
         "started_at": started, "finished_at": _now(), "total_seconds": round(time.perf_counter() - start, 2),
         "steps": steps.items,
         "canary": {k: canary_result.get(k) for k in ("package", "verdict", "expected", "detected", "reason")},
-        "outputs": {k: str(v) for k, v in paths.items() if Path(v).is_file() or k == "run"},
     }
+    if capsule is not None:
+        page_data = {"baseline": baseline, "verify": verify_result, "canary": canary_result,
+                     "strength": strength_result, "run": dict(run, steps=list(steps.items)), "proposals": used,
+                     "evidence": evidence}
+        steps.run("report", f"python -m tool report {paths['capsule_json']} --out {paths['capsule_html']}",
+                  report_html.write, capsule, paths["capsule_html"], page_data)
+    run["outputs"] = {k: str(v) for k, v in paths.items() if Path(v).is_file() or k == "run"}
     _write_json(paths["run"], run)
 
     print("\nwrote:")
