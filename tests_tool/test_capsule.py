@@ -99,3 +99,31 @@ def test_validate_unknown_label(inputs):
 def test_deterministic(inputs):
     now = datetime(2026, 10, 15, tzinfo=timezone.utc)
     assert build(*inputs, now=now) == build(*inputs, now=now)
+
+
+def test_at_a_glance_summary_and_missing_verify(inputs):
+    capsule = build(*inputs)
+    md = render_markdown(capsule)
+    glance = md.split("## At a glance", 1)[1].split("## Sections", 1)[0]
+    assert "- Before: 9 passed, 1 failed, 0 errors (Python 3.12.x)" in glance
+    assert "- p1: improved (after: 10 passed, 0 failed, 0 errors)" in glance
+    assert glance.count("Before:") == 1
+    assert "After/results" not in glance
+
+    missing_verify = render_markdown(build(inputs[0], inputs[1], inputs[2], None))
+    missing_glance = missing_verify.split("## At a glance", 1)[1].split("## Sections", 1)[0]
+    assert missing_glance.count("Verify: missing") == 1
+
+
+def test_missing_verify_reason_is_omitted(inputs):
+    capsule = build(*inputs)
+    result = next(i for i in capsule["sections"][7]["items"] if i["source"].startswith("verify.json#results"))
+    assert "reason=" not in result["text"]
+    assert "not recorded" not in result["text"]
+
+
+def test_missing_attempts_is_omitted(inputs):
+    capsule = build(*inputs)
+    analysis = next(i for i in capsule["sections"][4]["items"] if i["provenance"] == "ai_generated")
+    assert "attempts:" not in analysis["text"]
+    assert "attempts: not recorded" not in analysis["text"]

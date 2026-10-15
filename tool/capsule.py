@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 LABELS = {"observed", "executed", "ai_generated", "hint", "unverified"}
@@ -99,7 +100,9 @@ def build(evidence, baseline, proposals, verify, *, now=None, model_info=None) -
 
     props=(proposals or {}).get("proposals",[]) or []
     if proposals:
-        for i,p in enumerate(props): add(5,f"{p.get('problem','Problem not recorded')}. Rationale: {p.get('rationale','not recorded')} Model: {model['name']}; attempts: {(proposals.get('attempts','not recorded'))}.","ai_generated",f"proposals.json#proposals[{i}]")
+        for i,p in enumerate(props):
+            attempts = f"; attempts: {proposals['attempts']}" if "attempts" in proposals else ""
+            add(5,f"{p.get('problem','Problem not recorded')}. Rationale: {p.get('rationale','not recorded')} Model: {model['name']}{attempts}.","ai_generated",f"proposals.json#proposals[{i}]")
         for i,r in enumerate(proposals.get("rejected",[]) or []): add(5,f"Validator rejected proposal: {r.get('reason','reason not recorded')}","executed",f"proposals.json#rejected[{i}]")
         if not props and not proposals.get("rejected"): add(5,"No proposals were recorded.","unverified","proposals.json#proposals")
         if proposals.get("error"): add(5,f"Proposal generation reported an error: {proposals['error']}","unverified","proposals.json#error")
@@ -124,7 +127,8 @@ def build(evidence, baseline, proposals, verify, *, now=None, model_info=None) -
     results=(verify or {}).get("results",[]) or []
     for i,r in enumerate(results):
         after=_get(r,"after","pytest",default={}) or {}
-        add(8,f"{r.get('proposal_id','proposal')}: apply_ok={r.get('apply_ok','not recorded')}; before {_counts(pytest)}; after {_counts(after)}; fixed_tests={r.get('fixed_tests',[])}; newly_broken_tests={r.get('newly_broken_tests',[])}; verdict={r.get('verdict','not recorded')}; reason={r.get('reason','not recorded')}","executed",f"verify.json#results[{i}]")
+        reason = f"; reason={r['reason']}" if r.get("reason") else ""
+        add(8,f"{r.get('proposal_id','proposal')}: apply_ok={r.get('apply_ok','not recorded')}; before {_counts(pytest)}; after {_counts(after)}; fixed_tests={r.get('fixed_tests',[])}; newly_broken_tests={r.get('newly_broken_tests',[])}; verdict={r.get('verdict','not recorded')}{reason}","executed",f"verify.json#results[{i}]")
         if r.get("verdict")=="could_not_run": add(8,f"{r.get('proposal_id','proposal')} could not be run.","unverified",f"verify.json#results[{i}]")
     if not verify: add(8,"Verify results are missing.","unverified","verify.json")
     if not s[7]["items"]: add(8,"not available","unverified","inputs")
@@ -176,12 +180,27 @@ def validate_capsule(capsule) -> list[str]:
 
 def render_markdown(capsule) -> str:
     lines=["# Dependency Exit Capsule", "", f"Generated: {capsule['generated_at']}", f"Model: {capsule['model']['name']}", "", "## Legend", "", "- [observed] Read directly from repository files.", "- [executed] Produced by a command that was run.", "- [ai_generated] Suggested by the AI model; not verified by that label.", "- [hint] Built-in knowledge lead; not verified.", "- [unverified] Could not be checked or input is missing.", "", "## At a glance", ""]
-    before=next((i["text"] for sec in capsule["sections"] if sec["id"]=="1" for i in sec["items"] if i["provenance"]=="executed"),"Before: unavailable")
-    lines.append(f"- Before: {before}")
-    for sec in capsule["sections"]:
-        if sec["id"]=="8":
-            for i in sec["items"]:
-                if i["provenance"]=="executed": lines.append(f"- After/results: {i['text']}")
+    sections = {sec["id"]: sec for sec in capsule["sections"]}
+    before_items = sections.get("1", {}).get("items", [])
+    before_line = next((i["text"] for i in before_items if i["provenance"] == "executed"), "")
+    match = re.search(r"(\d+ passed, \d+ failed, \d+ errors) on Python (.+?) before any change", before_line)
+    if match:
+        lines.append(f"- Before: {match.group(1)} (Python {match.group(2)})")
+    else:
+        lines.append("- Before: unavailable (Python version not recorded)")
+    result_items = sections.get("8", {}).get("items", [])
+    any_result = False
+    for item in result_items:
+        if item["provenance"] != "executed" or item["text"].startswith("Before:"):
+            continue
+        result = re.match(r"([^:]+): .*?after (\d+ passed, \d+ failed, \d+ errors).*?verdict=([^;]+)", item["text"])
+        if result:
+            lines.append(f"- {result.group(1)}: {result.group(3)} (after: {result.group(2)})")
+            any_result = True
+    if any(i["provenance"] == "unverified" and "Verify results are missing" in i["text"] for i in result_items):
+        lines.append("- Verify: missing")
+    elif not any_result:
+        lines.append("- Verify: no proposal results")
     lines += ["", "## Sections", ""]
     for sec in capsule["sections"]:
         lines += [f"## {sec['id']}. {sec['title']}", ""]
